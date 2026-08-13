@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>V次元</title>
+<meta name="description" content="V次元是一个以VOCALOID、虚拟歌手为核心的中文社区">
+<link rel="icon" type="image/png" href="/images/favicon.png">
+<link rel="stylesheet" href="/style.css?v=20260844af">
+</head>
+<body>
+<div id="app">
+  <header class="topbar">
+    <div class="topbar-inner">
+      <a class="logo" href="#/">V次元</a>
+      <nav class="nav">
+        <a href="#/" title="首页">首页</a>
+        <a href="#/new" title="最新">最新</a>
+        <a href="#/videos" data-mobile-hide title="视频">视频</a>
+        <a href="#/search" data-desktop-hide title="搜索">搜索</a>
+        <a href="#/compose" class="compose-btn" title="发帖">发帖</a>
+      </nav>
+      <div class="search">
+        <input id="search-input" type="text" placeholder="搜索帖子 / 用户…">
+      </div>
+      <div class="user-area">
+        <a href="#/notifications" class="icon-link" title="通知"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path><path d="M13.73 21a2 2 0 0 1-3.46 0"></path></svg><span id="noti-badge" class="noti-badge" hidden></span></a>
+        <a href="#/ranking" class="icon-link" title="排行榜"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9H4.5a2.5 2.5 0 0 1 0-5H6"></path><path d="M18 9h1.5a2.5 2.5 0 0 0 0-5H18"></path><path d="M4 22h16"></path><path d="M10 14.66V17c0 .55-.47.98-.97 1.21C7.85 18.75 7 20.24 7 22"></path><path d="M14 14.66V17c0 .55.47.98.97 1.21C16.15 18.75 17 20.24 17 22"></path><path d="M18 2H6v7a6 6 0 0 0 12 0V2Z"></path></svg></a>
+        <a href="#/forums" class="icon-link" title="版块"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"></rect><rect x="14" y="3" width="7" height="7" rx="1"></rect><rect x="14" y="14" width="7" height="7" rx="1"></rect><rect x="3" y="14" width="7" height="7" rx="1"></rect></svg></a>
+        <a href="#/videos" class="icon-link" title="视频"><svg width="18" height="18" viewBox="0 0 24 24"><rect x="2" y="5" width="20" height="14" rx="3" fill="none" stroke="currentColor" stroke-width="2"></rect><polygon points="10.5 9 15.5 12 10.5 15" fill="currentColor"></polygon></svg></a>
+        <a href="#/messages" class="icon-link" title="消息"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg><span id="msg-badge" class="noti-badge" hidden></span></a>
+        <span id="me-badge" class="me-badge"></span>
+        <a id="me-link" href="#/me"></a>
+      </div>
+    </div>
+  </header>
+  <main id="main" class="main"></main>
+  <div id="toast" class="toast"></div>
+</div>
+<footer style="text-align:center;padding:18px 12px;color:var(--muted);font-size:12px">
+  <a href="#/survey" style="color:inherit;margin-right:16px">用户问卷</a>
+  <a href="#/feedback" style="color:inherit">反馈建议</a>
+</footer>
+<script src="/qrcode.min.js?v=20260844af"></script>
+<script src="/hls.min.js?v=20260844af"></script>
+<script>
+window.VCY_UPDATES = {
+  version: "20260871",
+  title: "V次元 更新",
+  items: [
+    "新增帖子排行榜:总榜/周榜,综合分 = 浏览×1 + 点赞×3 + 评论×5,每小时更新,点击导航栏奖杯图标查看",
+    "帖子附件支持查看与下载(图片直接看、视频直接播)",
+    "音频附件(mp3/flac/wav 等)可直接在线播放,不用下载",
+    "用户主页新增浏览历史,同步官网记录,想看哪个点哪个",
+    "评论新增点赞功能,可点赞/取消",
+    "用户主页获赞数修正(按全部帖子累计统计)",
+    "新增表情包系统:发帖、评论、私信、回复都能用表情了",
+    "新增三种浏览模式:极速(暴力预加载,适合网速好)、正常(默认)、省内存(不预加载图片,适合老设备)",
+    "正文里写 B站 BV 号(如 BV19j3F6DEdU)自动变成视频链接,点击跳转"
+  ]
+};
+</script>
+<script src="/app.js?v=20260871af"></script>
+</body>
+</html>
