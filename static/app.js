@@ -57,12 +57,15 @@ const playHls = (videoEl, url, onError) => {
   videoEl.load();
   if (url && /\.m3u8(\?|$)/i.test(url) && window.Hls && Hls.isSupported()) {
     const hls = new Hls({ maxBufferLength: 30, maxBufferSize: 120 * 1000 * 1000 });
+    let recovered = 0;
     hls.loadSource(url);
     hls.attachMedia(videoEl);
     hls.on(Hls.Events.ERROR, (evt, data) => {
-      if (data && data.fatal) {
-        if (onError) onError(hls, data);
-      }
+      if (!data) return;
+      if (!data.fatal) return;
+      if (data.type === Hls.ErrorTypes.NETWORK_ERROR && recovered < 2) { recovered++; try { hls.startLoad(); return; } catch (e) {} }
+      if (data.type === Hls.ErrorTypes.MEDIA_ERROR && recovered < 2) { recovered++; try { hls.recoverMediaError(); return; } catch (e) {} }
+      if (onError) onError(hls, data);
     });
     _hlsInstances.set(videoEl, hls);
     return hls;
@@ -76,6 +79,11 @@ const playHls = (videoEl, url, onError) => {
 const destroyHls = videoEl => {
   const old = _hlsInstances.get(videoEl);
   if (old) { try { old.destroy(); } catch (e) {} _hlsInstances.delete(videoEl); }
+};
+const videoErrMsg = data => {
+  const d = (data && (data.details || data.message)) || '';
+  if (/codec|incompatible/i.test(d)) return '该视频为 H.265(HEVC) 编码，当前浏览器无法解码。请用 Edge 或 Safari 打开观看，或点下方链接前往视频页';
+  return '视频已失效或暂不可用';
 };
 const resTag = (w, h) => {
   w = Number(w) || 0; h = Number(h) || 0;
@@ -536,6 +544,11 @@ views.thread = async (el, params) => {
   const t = tr.data?.data || tr.data || tr.data?.thread || {};
   const comments = cr.data?.data || {};
   const list = comments.list || [];
+  let playUrl = '';
+  if (t.video_id) {
+    const vr = await api('video/stream/' + t.video_id).catch(() => ({ status: 0, data: null }));
+    playUrl = (vr.data || {}).url || '';
+  }
   el.innerHTML = `<div class="card td-head">
     <div class="td-title">${esc(t.subject)}</div>
     <div class="td-sub">
@@ -546,7 +559,7 @@ views.thread = async (el, params) => {
       <span>浏览 ${fmtNum(t.views)} · 回复 ${fmtNum(t.replies)}</span>
       <span style="margin-left:auto"><button class="btn small-link" data-action="follow" data-uid="${t.authorid}">关注</button></span>
     </div>
-    <div class="td-body">${renderMsg(t.content || t.message || '')}${(t.images || []).filter(i => i.url).map(i => `<div class="td-img"><img src="${esc(i.url)}" loading="lazy" data-viewer="${esc(i.original_url || i.url)}"></div>`).join('')}${renderAttachments(t.attachments)}</div>
+    <div class="td-body">${renderMsg(t.content || t.message || '', true)}${t.video_id ? `<div class="td-video">${playUrl ? '<video id="td-video" controls preload="metadata" playsinline></video>' : '<div class="empty" style="padding:40px;text-align:center;color:#888">视频加载失败或暂不可用</div>'}<div class="td-video-bar"><a class="td-video-link" href="#/v/${t.video_id}">前往视频页 · 评论与更多 →</a></div></div>` : ''}${(t.images || []).filter(i => i.url && !(t.video_id && String(i.aid || '').indexOf('vod_') === 0)).map(i => `<div class="td-img"><img src="${esc(i.url)}" loading="lazy" data-viewer="${esc(i.original_url || i.url)}"></div>`).join('')}${renderAttachments(t.attachments)}</div>
     <div class="td-actions">
       <button class="btn like-btn ${t.user_attitude === 1 ? 'active-like' : ''}" data-action="attitude" data-v="1">${svgIcon('like')}赞 ${fmtNum(t.likes)}</button>
       <button class="btn ${t.user_attitude === -1 ? 'active-like' : ''}" data-action="attitude" data-v="-1">${svgIcon('dislike')}踩 ${fmtNum(t.dislikes)}</button>
@@ -567,7 +580,14 @@ views.thread = async (el, params) => {
       <div class="row"><button class="btn smiley-btn" id="cmt-smiley" type="button">${svgIcon('smile', 16)}表情</button><button class="btn primary" id="cmt-send">发表评论</button></div>
     </div>
   </div>`;
+  hydrateEmbeds(el);
   attachSmileyPicker($('#cmt-input'), $('#cmt-smiley'));
+  if (playUrl) {
+    const vEl = $('#td-video');
+    if (vEl) playHls(vEl, playUrl, (h, data) => {
+      vEl.outerHTML = '<div class="empty" style="padding:40px;text-align:center;color:#888">' + esc(videoErrMsg(data)) + '</div>';
+    });
+  }
   const pidJump = parseInt(params.pid || '0');
   if (pidJump) {
     setTimeout(() => {
@@ -817,7 +837,54 @@ function attachSmileyPicker(ta, btn) {
 document.addEventListener('click', (ev) => {
   if (_smileyPanel && !_smileyPanel.contains(ev.target)) { _smileyPanel.remove(); _smileyPanel = null; }
 });
-function renderMsg(text) {
+function vcyMediaKind(raw) {
+  if (/163cn\.tv|music\.163\.com/i.test(raw)) return 'wyy';
+  if (/b23\.tv|bili2233\.cn/i.test(raw)) return 'bili';
+  if (/bilibili\.com\/video\//i.test(raw) || /BV[0-9A-Za-z]{10}/.test(raw)) return 'bili';
+  return null;
+}
+function vcyWyyInfo(raw) {
+  const im = raw.match(/[?&#]id=(\d+)/) || raw.match(/\/song\/(\d+)/) || raw.match(/\/playlist\/(\d+)/);
+  if (!im) return null;
+  let type = 2, h = 66;
+  if (/playlist/i.test(raw)) { type = 0; h = 430; }
+  else if (/album/i.test(raw)) { type = 1; h = 430; }
+  else if (/program|\/dj|radio/i.test(raw)) { type = 3; h = 66; }
+  return { type, id: im[1], h };
+}
+function vcyWyyEmbed(info) {
+  const src = `https://music.163.com/outchain/player?type=${info.type}&id=${info.id}&auto=0&height=${info.h}`;
+  return `<div class="embed embed-wyy"><iframe src="${src}" frameborder="0" scrolling="no" allow="autoplay" loading="lazy" style="height:${info.h + 20}px"></iframe></div>`;
+}
+function vcyBiliVid(raw) {
+  let m = raw.match(/BV[0-9A-Za-z]{10}/);
+  if (m) return { bvid: m[0] };
+  m = raw.match(/\/video\/av(\d+)/i) || raw.match(/[?&]aid=(\d+)/);
+  if (m) return { aid: m[1] };
+  return null;
+}
+function vcyBiliEmbed(v) {
+  const q = v.bvid ? `bvid=${v.bvid}` : `aid=${v.aid}`;
+  const src = `https://player.bilibili.com/player.html?${q}&page=1&high_quality=1&danmaku=0&autoplay=0`;
+  return `<div class="embed embed-bili"><iframe src="${src}" frameborder="0" scrolling="no" allowfullscreen="true" loading="lazy"></iframe></div>`;
+}
+function vcyEmbedLink(url, label) {
+  return `<a class="embed-link" href="${esc(url)}" target="_blank" rel="noopener">${label}</a>`;
+}
+function vcyMediaEmbed(raw, kind) {
+  if (kind === 'wyy') {
+    const info = vcyWyyInfo(raw);
+    if (info) return vcyWyyEmbed(info) + vcyEmbedLink(raw, '在网易云音乐打开');
+    return `<div class="embed-pending" data-resolve="${esc(raw)}" data-kind="wyy"></div>`;
+  }
+  if (kind === 'bili') {
+    const v = vcyBiliVid(raw);
+    if (v) return vcyBiliEmbed(v) + vcyEmbedLink(raw, '在哔哩哔哩打开');
+    return `<div class="embed-pending" data-resolve="${esc(raw)}" data-kind="bili"></div>`;
+  }
+  return `<a href="${esc(raw)}" target="_blank" rel="noopener">${esc(raw)}</a>`;
+}
+function renderMsg(text, embed) {
   if (!text) return '';
   let s = esc(text);
   const ph = [];
@@ -827,11 +894,49 @@ function renderMsg(text) {
     const u = SMILEY_MAP && SMILEY_MAP[m];
     return u ? phRe(m, `<img src="${esc(u)}" class="smiley" loading="lazy" data-viewer="${esc(u)}" alt="${m}">`) : m;
   });
-  s = s.replace(/(https?:\/\/[^\s<"]+)/g, m => phRe(m, `<a href="${m}" target="_blank" rel="noopener">${m}</a>`));
-  s = s.replace(/\bBV[0-9A-Za-z]{10}\b/g, m => phRe(m, `<a href="https://www.bilibili.com/video/${m}" target="_blank" rel="noopener" class="bv-link">${m}</a>`));
+  const media = (raw, label) => {
+    const kind = embed && vcyMediaKind(raw);
+    if (!kind) return `<a href="${esc(raw)}" target="_blank" rel="noopener">${label || esc(raw)}</a>`;
+    return vcyMediaEmbed(raw, kind);
+  };
+  // BBCode [url=...]文字[/url] / [url]...[/url]
+  s = s.replace(/\[url=([^\]\s]+)\]([\s\S]*?)\[\/url\]/gi, (m, u, label) => phRe(m, media(u.replace(/&amp;/g, '&'), label)));
+  s = s.replace(/\[url\]([\s\S]*?)\[\/url\]/gi, (m, u) => phRe(m, media(u.replace(/&amp;/g, '&'), '')));
+  if (embed) {
+    // 短链(网易云/哔哩哔哩)需要服务端解析
+    s = s.replace(/https?:\/\/(?:163cn\.tv|b23\.tv|bili2233\.cn)\/[^\s<"\[\]]+/gi, m => phRe(m, vcyMediaEmbed(m.replace(/&amp;/g, '&'), vcyMediaKind(m))));
+  }
+  s = s.replace(/https?:\/\/[^\s<"\[\]]+/g, m => {
+    const raw = m.replace(/&amp;/g, '&');
+    if (embed) { const kind = vcyMediaKind(raw); if (kind) return phRe(m, vcyMediaEmbed(raw, kind)); }
+    return phRe(m, `<a href="${m}" target="_blank" rel="noopener">${m}</a>`);
+  });
+  s = s.replace(/\bBV[0-9A-Za-z]{10}\b/g, m => embed
+    ? phRe(m, vcyBiliEmbed({ bvid: m }) + vcyEmbedLink('https://www.bilibili.com/video/' + m, '在哔哩哔哩打开'))
+    : phRe(m, `<a href="https://www.bilibili.com/video/${m}" target="_blank" rel="noopener" class="bv-link">${m}</a>`));
   s = s.replace(/\u0001P(\d+)\u0002/g, (m, i) => ph[Number(i)]);
   s = s.replace(/\n/g, '<br>');
   return s;
+}
+async function hydrateEmbeds(root) {
+  if (!root) return;
+  const nodes = [...root.querySelectorAll('.embed-pending[data-resolve]')];
+  for (const n of nodes) {
+    const url = n.dataset.resolve || '';
+    if (!url) continue;
+    let final = url, html = '';
+    try {
+      const r = await fetch('/api/resolve?url=' + encodeURIComponent(url));
+      if (r.ok) { const d = await r.json(); if (d && d.url) final = d.url; }
+    } catch (e) {}
+    const kind = vcyMediaKind(final);
+    if (kind === 'wyy') { const info = vcyWyyInfo(final); if (info) html = vcyWyyEmbed(info) + vcyEmbedLink(final, '在网易云音乐打开'); }
+    if (!html && kind === 'bili') { const v = vcyBiliVid(final); if (v) html = vcyBiliEmbed(v) + vcyEmbedLink(final, '在哔哩哔哩打开'); }
+    if (!html) html = `<a href="${esc(final)}" target="_blank" rel="noopener">${esc(url)}</a>`;
+    const tmp = document.createElement('div');
+    tmp.innerHTML = html;
+    if (tmp.firstChild) n.replaceWith(...tmp.childNodes);
+  }
 }
 
 function openViewer(url) {
@@ -1425,8 +1530,8 @@ views.msg = async (el, params) => {
     attachSmileyPicker($('#cmt-input'), $('#cmt-smiley'));
     if (playUrl) {
       const vMain = $('#v-main');
-      if (vMain) playHls(vMain, playUrl, () => {
-        vMain.outerHTML = '<div class="empty" style="padding:40px;text-align:center;color:#888">视频已失效或暂不可用</div>';
+      if (vMain) playHls(vMain, playUrl, (h, data) => {
+        vMain.outerHTML = '<div class="empty" style="padding:40px;text-align:center;color:#888">' + esc(videoErrMsg(data)) + '</div>';
       });
     }
     let vReplyingTo = null;
@@ -2588,6 +2693,11 @@ async function route(force) {
   else if (seg[0] === 'ranking') { view = views.ranking; params.type = params.type; key = 'ranking' + (params.type || 'total'); }
   else if (seg[0] === 'survey') { view = views.survey; key = 'survey'; }
 
+  const navActive = seg[0] === '' ? '#/' : (seg[0] === 'new' ? '#/new' : ((seg[0] === 'videos' || seg[0] === 'shorts' || seg[0] === 'v') ? '#/videos' : null));
+  document.querySelectorAll('.topbar .nav a').forEach(a => {
+    a.classList.toggle('active', navActive !== null && a.getAttribute('href') === navActive);
+  });
+
   if (key === lastRoute && !force) return;
   if (lastRoute) _scrollPos[lastRoute] = window.scrollY;
 
@@ -2641,6 +2751,14 @@ $('#search-input').addEventListener('keydown', e => {
     location.hash = '#/search?q=' + encodeURIComponent(e.target.value.trim());
   }
 });
+
+(function initMoreMenu() {
+  const btn = $('#more-btn'), menu = $('#more-menu');
+  if (!btn || !menu) return;
+  btn.addEventListener('click', e => { e.stopPropagation(); menu.classList.toggle('open'); });
+  document.addEventListener('click', e => { if (!menu.contains(e.target)) menu.classList.remove('open'); });
+  menu.addEventListener('click', () => menu.classList.remove('open'));
+})();
 
 document.addEventListener('paste', (e) => {
   const ce = e.target.closest?.('.ce-in');
