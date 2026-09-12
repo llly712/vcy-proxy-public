@@ -11,6 +11,7 @@ import io
 import sys
 import json
 import time
+import socket
 import struct
 import ctypes
 import threading
@@ -32,6 +33,39 @@ K2 = os.environ.get("VCY_K2", "")  # 源站签名时间戳参数名,自行获取
 WASM_PATH = os.path.join(BASE_DIR, "eo_sign_wasm_bg.wasm")
 CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
 
+# ---------------- 源站出口代理(可选,推荐) ----------------
+# 源站前置 WAF 会按 IP 信誉拦截机房 IP(弹人机验证)。把出站请求改从
+# "干净出口 IP"(住宅宽带/家宽)发出即可绕开。例:
+#   VCY_SOCKS=socks5h://127.0.0.1:1080
+# 留空则直连;代理探测失败自动回退直连。
+SOCKS_PROXY = (os.environ.get("VCY_SOCKS") or "").strip()
+_proxy_state = {"ok": bool(SOCKS_PROXY), "next_check": 0.0}
+
+
+def _proxy_alive():
+    """探测本地 SOCKS 端口是否可用(每 30s 最多探一次)"""
+    if not SOCKS_PROXY:
+        return False
+    now = time.time()
+    if now < _proxy_state["next_check"]:
+        return _proxy_state["ok"]
+    try:
+        hp = SOCKS_PROXY.split("://", 1)[-1].rsplit("@", 1)[-1]
+        host, port = hp.rsplit(":", 1)
+        with socket.create_connection((host, int(port)), timeout=2):
+            _proxy_state["ok"] = True
+    except Exception:
+        _proxy_state["ok"] = False
+    _proxy_state["next_check"] = now + 30
+    return _proxy_state["ok"]
+
+
+def _proxies():
+    if _proxy_alive():
+        return {"http": SOCKS_PROXY, "https": SOCKS_PROXY}
+    return None
+
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("vcy")
 
@@ -46,10 +80,11 @@ def _sign(path: str, ts: int) -> str:
     return _hashlib.md5(f"{SIGN_SECRET}{path}{ts}".encode()).hexdigest()
 
 
-# ---------------- POW 验证码(天爱) ----------------
-# POW 破解算法已移除(逆向成果不开源)。
+# ---------------- 登录验证码 ----------------
+# 源站登录验证码已从"天爱 POW"升级为"拼图滑块(SLIDER2)",求解算法属逆向成果,未开源。
+# 公开版返回空,登录接口会提示不可用;如需登录请自行实现验证码求解或改用其他方式。
 def _solve_pow_captcha(scene: str = "login"):
-    """天爱 POW 验证码求解(已移除,需自行实现或对接人工验证)"""
+    """登录验证码求解(已移除,需自行实现)"""
     return None, None
 
 
@@ -115,7 +150,7 @@ def _eo_session():
     global _simple_session
     with _simple_lock:
         if _simple_session is None:
-            _simple_session = creq.Session(impersonate="chrome131_android")
+            _simple_session = creq.Session(impersonate="chrome131_android", proxies=_proxies())
         return _simple_session
 
 
@@ -146,27 +181,43 @@ def _api_raw(path, params, method="GET", jwt=None, body=None, headers=None):
         hd["Authorization"] = f"Bearer {jwt}"
     if headers:
         hd.update(headers)
-    kw = dict(headers=hd, impersonate="chrome131_android", timeout=30)
     s = _eo_session()
-    for attempt in range(3):
+
+    def _send(use_proxy):
+        pxy = _proxies() if use_proxy else None
         if s is not None:
-            if method == "POST":
-                resp = s.post(url, **kw, json=body or {})
-            elif method == "PUT":
-                resp = s.put(url, **kw, json=body or {})
-            elif method == "DELETE":
-                resp = s.delete(url, **kw)
-            else:
-                resp = s.get(url, **kw)
+            try:
+                s.proxies = pxy
+            except Exception:
+                pass
+            sess = s
+            kw = dict(headers=hd, impersonate="chrome131_android", timeout=30)
         else:
-            if method == "POST":
-                resp = creq.post(url, **kw, json=body or {})
-            elif method == "PUT":
-                resp = creq.put(url, **kw, json=body or {})
-            elif method == "DELETE":
-                resp = creq.delete(url, **kw)
-            else:
-                resp = creq.get(url, **kw)
+            sess = creq
+            kw = dict(headers=hd, impersonate="chrome131_android", timeout=30, proxies=pxy)
+        if method == "POST":
+            return sess.post(url, **kw, json=body or {})
+        elif method == "PUT":
+            return sess.put(url, **kw, json=body or {})
+        elif method == "DELETE":
+            return sess.delete(url, **kw)
+        return sess.get(url, **kw)
+
+    resp = None
+    for attempt in range(3):
+        if resp is None:
+            try:
+                resp = _send(True)
+            except Exception as e:
+                log.warning("proxy request failed, fallback direct: %s", e)
+                _proxy_state["ok"] = False
+                _proxy_state["next_check"] = time.time() + 30
+        if resp is None:
+            try:
+                resp = _send(False)
+            except Exception as e:
+                log.error("request failed: %s", e)
+                continue
         ct = resp.headers.get("content-type", "")
         if resp.status_code == 200 and "json" in ct:
             return resp
@@ -182,8 +233,11 @@ def _api_raw(path, params, method="GET", jwt=None, body=None, headers=None):
             import time as _t
             _t.sleep(0.5)
             if _eo_ensure_cookie():
+                resp = None
                 continue
         return resp
+    if resp is None:
+        raise RuntimeError("api request failed")
     return resp
 
 
@@ -603,7 +657,7 @@ def auth_login():
     try:
         captcha_id, captcha_token = _solve_pow_captcha("login")
         if not captcha_id or not captcha_token:
-            return Response(json.dumps({"status": "fail", "message": "人机验证获取失败,请重试"}, ensure_ascii=False), 200, mimetype="application/json")
+            return Response(json.dumps({"status": "fail", "message": "自动登录不可用:源站登录验证码为拼图滑块(公开版未含求解器)"}, ensure_ascii=False), 200, mimetype="application/json")
         login_body = {
             "username": account,
             "password": password,

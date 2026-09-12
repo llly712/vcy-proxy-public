@@ -1,8 +1,20 @@
 # V次元代理站 (vcy-proxy-public)
 
-[V次元](https://bbs.lty.fan) VOCALOID 社区论坛的网页代理站。
+[V次元](https://bbs.lty.fan) VOCALOID 社区论坛的网页代理站(轻量、快速、手机友好)。
 
-> 这是**公开版**:完整的 Web 应用代码(前端 + 后端框架),涉及逆向破解的算法(EdgeOne 人机验证求解、天爱 POW 验证码破解、源站签名密钥)已从本仓库移除,相关部分替换为环境变量配置或占位实现,保留完整业务逻辑与代码结构供学习参考。
+> 这是**公开版**:完整的 Web 应用代码(前端 + 后端框架),涉及逆向破解的算法(EdgeOne 人机验证求解、历史 POW 验证码破解、源站签名密钥、源站登录滑块求解)已从本仓库移除,相关部分替换为环境变量配置或占位实现,保留完整业务逻辑与代码结构供学习参考。
+
+## 截图
+
+桌面端:
+
+| 首页 | 排行榜 |
+|---|---|
+| ![首页](docs/screenshots/home.png) | ![排行榜](docs/screenshots/ranking.png) |
+
+| 视频中心 | 手机端 |
+|---|---|
+| ![视频中心](docs/screenshots/videos.png) | ![手机端](docs/screenshots/mobile.png) |
 
 ## 功能
 
@@ -29,8 +41,9 @@
 ## 目录结构
 
 ```
-├── server.py      # Flask 后端代理 (反向代理源站 /webapi/*)
-├── static/        # 前端 (index.html / app.js / style.css / hls.min.js / leaflet.*)
+├── server.py            # Flask 后端代理 (反向代理源站 /webapi/*)
+├── static/              # 前端 (index.html / app.js / style.css / hls.min.js / leaflet.*)
+├── docs/screenshots/    # 截图
 └── .gitignore
 ```
 
@@ -48,6 +61,7 @@ python server.py    # 监听 0.0.0.0:8000
 | `VCY_API_BASE` | 源站 API 地址,默认 `https://bbs.lty.fan` |
 | `VCY_SIGN_SECRET` | 源站接口签名密钥(MD5(secret+path+ts)) |
 | `VCY_K1` / `VCY_K2` | 签名参数名 |
+| `VCY_SOCKS` | 出站代理(如 `socks5h://127.0.0.1:1080`),留空直连,建议指向住宅/家宽出口 |
 | `VCY_LOGIN_USER` / `VCY_LOGIN_PASS` | 全局保活账号 |
 
 `config.json`(不入库): `access_token` / `refresh_token` / `smtp`(邮件通知)。
@@ -59,10 +73,32 @@ python server.py    # 监听 0.0.0.0:8000
                  └─ 签名、token 管理、验证码处理(公开版为占位)
 ```
 
-- 后端 `_api_raw()` 统一转发请求,自动附带签名与鉴权头
+- 后端 `_api_raw()` 统一转发请求,自动附带签名与鉴权头;出站可经 `VCY_SOCKS` 代理(失败自动回退直连)
 - 视频流: 源站签发 psign JWT → 腾讯云 getplayinfo → m3u8 直链(未登录 30s 试看,登录用户自动刷新 token 解锁完整版)
 - 附件经 `/api/attach` 同域代理下载,避免 OSS 防盗链
 - 前端静态资源带 `?v=` 版本号,更新后需递增
+
+## ⚠️ 已知问题与限制
+
+这份代码是"能跑通"的工程实现,但在**源站当前状态下**有几个必须知道的前提,直接部署大概率会遇到:
+
+1. **需要"干净"的出站 IP(最重要)**
+   源站前置了 WAF,会按 **IP 信誉**判定:机房/数据中心 IP 会被弹人机验证(阿里云验证码,含设备指纹,无法自动过),住宅宽带 IP 则直接放行。因此本站在服务器上部署时,出站请求建议通过 `VCY_SOCKS` 走**家庭宽带/住宅代理**出口,否则源站接口会大量失败。
+
+2. **源站登录验证码已升级为"拼图滑块"(SLIDER2)**
+   早期是"天爱 POW"(可离线求解),现已升级为图片拼图滑块,且判定在服务端。本公开版**未包含**该求解器,因此 `/api/auth/login`(自动登录)不可用,占位返回失败。浏览类功能不依赖它(用源站匿名态即可)。
+
+3. **全局 token 会被源站撤销**
+   源站同一账号在新设备登录会**顶掉**旧会话,导致服务端缓存的 `refresh_token` 失效(`Token已被撤销`)。失效后视频等需要登录态的接口会 401;需重新登录写入新 token 并重启服务。
+
+4. **视频多为 H.265 / HEVC 编码**
+   部分浏览器(尤其 Chrome/Android)无法解码,建议用 **Edge 或 Safari** 观看;代码里对不支持的浏览器会给出提示。
+
+5. **图片防盗链**
+   源站图片有 Referer 校验,前端已加 `<meta name="referrer" content="no-referrer">`,换域名部署时注意保留。
+
+6. **仅供学习,请勿公开传播**
+   代理站会消耗源站资源,公开传播极易导致源站封 IP / 加验证,请自用、低频。
 
 ## 许可证
 
